@@ -26,6 +26,7 @@ import psycopg
 import psycopg2
 import psycopg2.extras
 import uvloop
+import psqlpy
 
 
 def _chunks(iterable, n):
@@ -208,6 +209,27 @@ async def async_psycopg_copy(conn, query, args):
         await conn.commit()
         return cur.rowcount
 
+PSQLPY_POOL = None
+
+
+async def psqlpy_connect(args):
+    global PSQLPY_POOL
+    if PSQLPY_POOL is None:
+        PSQLPY_POOL = psqlpy.ConnectionPool(
+            dsn=f"postgres://{args.pguser}@{args.pghost}:{args.pgport}/postgres",
+            max_db_pool_size=args.concurrency,
+        )
+    return await PSQLPY_POOL.connection()
+
+
+async def psqlpy_execute(conn, query, args):
+    results = await conn.execute(query, args)
+    return len(results.result())
+
+
+async def psqlpy_executemany(conn, query, args):
+    await conn.execute_many(query, args)
+    return len(args)
 
 async def worker(executor, eargs, start, duration, timeout):
     queries = 0
@@ -339,7 +361,8 @@ async def runner(args, connector, executor, copy_executor, batch_executor,
         finally:
             for conn in conns:
                 if is_async:
-                    await conn.close()
+                    if hasattr(conn, 'close'):
+                        await conn.close()
                 else:
                     conn.close()
 
@@ -440,7 +463,8 @@ if __name__ == '__main__':
             'psycopg2',
             'psycopg3',
             'psycopg3-async',
-            'postgresql'
+            'postgresql',
+            'psqlpy',
         ],
     )
     parser.add_argument(
@@ -521,6 +545,17 @@ if __name__ == '__main__':
         connector, executor = pypostgresql_connect, pypostgresql_execute
         is_async = False
         arg_format = 'native'
+    elif args.driver == 'psqlpy':
+        if query.startswith('COPY '):
+            connector, executor, copy_executor = \
+                psycopg_connect, psycopg_execute, psycopg_copy
+            is_async = False
+            arg_format = 'python'
+        else:
+            connector, executor, batch_executor = \
+                psqlpy_connect, psqlpy_execute, psqlpy_executemany
+            is_async = True
+            arg_format = 'native'
     else:
         raise ValueError('unexpected driver: {!r}'.format(args.driver))
 
