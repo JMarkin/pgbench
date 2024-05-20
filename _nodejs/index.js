@@ -169,7 +169,7 @@ function runner(args, querydata) {
             return;
         }
 
-        if (query_args.length > 0 && query_args[0].constructor === Object) {
+        if (!!query_args && query_args.length > 0 && query_args[0].constructor === Object) {
             batch = query_args[0];
             stmt.values = batch.row;
         }
